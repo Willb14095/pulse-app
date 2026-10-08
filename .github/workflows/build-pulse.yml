@@ -1,0 +1,89 @@
+name: Build Pulse.app
+
+# Lets you trigger the build manually from the GitHub "Actions" tab
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-14   # free macOS runner (Apple Silicon, macOS 14 / Sonoma)
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build release binary
+        run: swift build -c release
+
+      - name: Assemble Pulse.app bundle
+        run: |
+          set -e
+          APP="Pulse.app"
+          BIN=".build/release/ActivityTracker"
+
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+
+          cp "$BIN" "$APP/Contents/MacOS/ActivityTracker"
+          chmod +x "$APP/Contents/MacOS/ActivityTracker"
+
+          # Generate the app icon (optional; ignored if it fails)
+          if [ -f "Scripts/generate_icon.swift" ]; then
+            swiftc -framework AppKit -framework CoreGraphics -o /tmp/generate_icon Scripts/generate_icon.swift || true
+            /tmp/generate_icon || true
+            if [ -d /tmp/ActivityTracker.iconset ]; then
+              iconutil -c icns /tmp/ActivityTracker.iconset -o "$APP/Contents/Resources/AppIcon.icns" || true
+            fi
+          fi
+
+          cat > "$APP/Contents/Info.plist" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>ActivityTracker</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.alpgiraykelem.activity-tracker</string>
+              <key>CFBundleName</key>
+              <string>Pulse</string>
+              <key>CFBundleDisplayName</key>
+              <string>Pulse</string>
+              <key>CFBundleVersion</key>
+              <string>1.1.0</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.1.0</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>13.0</string>
+              <key>LSUIElement</key>
+              <true/>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>NSAppleEventsUsageDescription</key>
+              <string>Pulse needs access to read window details from Safari, Terminal, Spotify and other apps.</string>
+          </dict>
+          </plist>
+          PLIST
+
+          # Ad-hoc sign so it at least has a stable identity (still NOT notarized)
+          codesign --force --deep --sign - "$APP" || true
+
+          # Zip it preserving macOS metadata
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "Pulse-macOS.zip"
+
+      - name: Upload Pulse.app as downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pulse-macOS
+          path: Pulse-macOS.zip
+          if-no-files-found: error
